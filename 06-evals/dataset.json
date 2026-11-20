@@ -1,0 +1,18 @@
+[
+  {"input": "How do I connect to the VPN from home?", "expected_output": {"route": "kb_agent", "tool": "search_kb", "must_mention": ["GlobalProtect"]}},
+  {"input": "Is email down? Nothing is arriving.", "expected_output": {"route": "kb_agent", "tool": "check_system_status", "must_mention": []}},
+  {"input": "VPN keeps dropping every few minutes", "expected_output": {"route": "kb_agent", "tool": "check_system_status", "must_mention": ["degraded"]}},
+  {"input": "The 3rd floor printer is not printing", "expected_output": {"route": "kb_agent", "tool": "check_system_status", "must_mention": ["outage"]}},
+  {"input": "How can I set up Outlook on my iPhone?", "expected_output": {"route": "kb_agent", "tool": "search_kb", "must_mention": ["Outlook"]}},
+  {"input": "I need to install Figma, how do I get it?", "expected_output": {"route": "kb_agent", "tool": "search_kb", "must_mention": ["portal"]}},
+  {"input": "Wi-Fi won't connect in the office", "expected_output": {"route": "kb_agent", "tool": null, "must_mention": []}},
+  {"input": "What's the status of INC-1001?", "expected_output": {"route": "ticket_agent", "tool": "get_ticket", "must_mention": ["In Progress"]}},
+  {"input": "Any update on ticket INC-1003?", "expected_output": {"route": "ticket_agent", "tool": "get_ticket", "must_mention": ["Resolved"]}},
+  {"input": "Open a ticket for bob: monitor flickers, low priority", "expected_output": {"route": "ticket_agent", "tool": "create_ticket", "must_mention": ["INC-"]}},
+  {"input": "Which laptop does carol have?", "expected_output": {"route": "ticket_agent", "tool": "lookup_user", "must_mention": ["MacBook Air"]}},
+  {"input": "Can you raise a ticket for alice? Excel crashes when opening big files", "expected_output": {"route": "ticket_agent", "tool": "create_ticket", "must_mention": ["INC-"]}},
+  {"input": "Hello!", "expected_output": {"route": "general", "tool": null, "must_mention": []}},
+  {"input": "Thanks a lot, that fixed it", "expected_output": {"route": "general", "tool": null, "must_mention": []}},
+  {"input": "Who will win the cricket match this weekend?", "expected_output": {"route": "general", "tool": null, "must_mention": ["IT"]}},
+  {"input": "Write me a poem about the ocean", "expected_output": {"route": "general", "tool": null, "must_mention": ["IT"]}}
+]

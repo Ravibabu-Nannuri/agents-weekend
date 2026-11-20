@@ -1,0 +1,16 @@
+# Agent framework
+langgraph>=1.2
+langchain>=1.5
+langchain-anthropic>=1.7
+langchain-openai>=1.8
+langgraph-checkpoint-sqlite>=3.0
+
+# Observability + evals
+langfuse>=5.2
+
+# Block 08 comparison (LiteLLM lets the Agents SDK run on Claude)
+openai-agents[litellm]>=0.25
+openinference-instrumentation-openai-agents>=2.8
+
+python-dotenv>=1.0
+pytest>=8.0
