@@ -65,7 +65,7 @@ def run(agent, label):
                 config=langfuse_config(recursion_limit=12),
             )
         tool_calls = [tc["name"] for m in result["messages"] for tc in getattr(m, "tool_calls", []) or []]
-        print(f"\n[{label}] Q: {q}\n  tools used: {tool_calls}\n  A: {result['messages'][-1].content}")
+        print(f"\n[{label}] Q: {q}\n  tools used: {tool_calls}\n  A: {result['messages'][-1].text}")
 
 
 def main():

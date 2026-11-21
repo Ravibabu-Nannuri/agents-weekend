@@ -30,7 +30,7 @@ def main():
         #         config=langfuse_config() so the run is traced.
         result = ...
 
-    print("A:", result["messages"][-1].content)
+    print("A:", result["messages"][-1].text)
     # TODO 3: why do we need this line? (hint: short scripts)
     flush()
 

@@ -46,7 +46,7 @@ def task(*, item, **kwargs):
     result = get_graph().invoke({"messages": [{"role": "user", "content": question}]},
                                 config=langfuse_config(recursion_limit=20))
     tools = [tc["name"] for m in result["messages"] for tc in (getattr(m, "tool_calls", None) or [])]
-    return {"route": result["route"], "tools": tools, "answer": result["messages"][-1].content}
+    return {"route": result["route"], "tools": tools, "answer": result["messages"][-1].text}
 
 
 # ------------------------------------------------------------ evaluators

@@ -34,7 +34,7 @@ def build_graph(llm=None, router_llm=None):
 
     def general(state):
         reply = llm.invoke([SystemMessage(sol.GENERAL_PROMPT)] + state["messages"])
-        return {"messages": [AIMessage(content=reply.content)]}
+        return {"messages": [AIMessage(content=reply.text)]}
 
     g = StateGraph(sol.HelpdeskState)
     g.add_node("router", sol.build_router(router_llm))
@@ -54,7 +54,7 @@ def main():
     for q in ["How do I set up email on my phone?", "What's happening with INC-1001?", "Thanks!"]:
         with trace_attributes(tags=["block-04", "starter"]):
             r = graph.invoke({"messages": [{"role": "user", "content": q}]}, config=langfuse_config(recursion_limit=20))
-        print(f"\nQ: {q}\n  route: {r['route']}\n  A: {r['messages'][-1].content}")
+        print(f"\nQ: {q}\n  route: {r['route']}\n  A: {r['messages'][-1].text}")
     flush()
 
 

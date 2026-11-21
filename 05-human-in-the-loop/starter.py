@@ -44,7 +44,7 @@ def main():
     # TODO 3: while "__interrupt__" in result: show result["__interrupt__"][0].value,
     #         ask for y/n with input(), then resume with graph.invoke(Command(resume={...}), config=config)
 
-    print(result["messages"][-1].content)
+    print(result["messages"][-1].text)
     flush()
 
 

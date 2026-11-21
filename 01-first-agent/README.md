@@ -13,6 +13,12 @@
 - Note the **tokens, cost and latency**. Write the numbers down; you'll compare later.
 - The `block-01` tag and `alice` user id (from `trace_attributes`).
 
+## Notice: content blocks
+Newer Claude models "think" before answering. The reply's `.content` is a **list of blocks**
+(`thinking` + `text`), not a plain string. That's why the code prints `.text`, which joins just the
+text blocks. Try printing `result["messages"][-1].content` to see the raw blocks, and find the
+thinking block in the Langfuse generation too.
+
 ## Break it on purpose
 - Delete `flush()` and run again. Did the trace show up? (Sometimes yes, sometimes late.) Why?
 - Change `SYSTEM_PROMPT` to "Answer like a pirate". Run again and compare both traces side by side.

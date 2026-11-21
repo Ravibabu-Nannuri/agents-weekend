@@ -32,7 +32,7 @@ def chat(graph, thread_id: str, user_id: str, text: str) -> str:
             {"messages": [{"role": "user", "content": text}]},
             config=langfuse_config(thread_id=thread_id, recursion_limit=12),
         )
-    return result["messages"][-1].content
+    return result["messages"][-1].text
 
 
 def main():

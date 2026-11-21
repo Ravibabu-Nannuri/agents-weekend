@@ -72,7 +72,7 @@ def run_with_approval(graph, text: str, thread_id: str, approver=ask_human) -> s
             payload = result["__interrupt__"][0].value
             decision = approver(payload)
             result = graph.invoke(Command(resume=decision), config=config)
-    return result["messages"][-1].content
+    return result["messages"][-1].text
 
 
 def main():

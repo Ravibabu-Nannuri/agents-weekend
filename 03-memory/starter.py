@@ -28,7 +28,7 @@ def chat(graph, thread_id: str, user_id: str, text: str) -> str:
         #         knows which conversation to load
         result = graph.invoke({"messages": [{"role": "user", "content": text}]},
                               config=langfuse_config(recursion_limit=12))
-    return result["messages"][-1].content
+    return result["messages"][-1].text
 
 
 def main():

@@ -71,7 +71,7 @@ def build_graph(llm=None, router_llm=None, checkpointer=None):
 
     def general(state: HelpdeskState):
         reply = llm.invoke([SystemMessage(GENERAL_PROMPT)] + state["messages"])
-        return {"messages": [AIMessage(content=reply.content)]}
+        return {"messages": [AIMessage(content=reply.text)]}
 
     g = StateGraph(HelpdeskState)
     g.add_node("router", build_router(router_llm))
@@ -102,7 +102,7 @@ def main():
         with trace_attributes(tags=["block-04"], session_id=f"demo-{i}"):
             result = graph.invoke({"messages": [{"role": "user", "content": q}]},
                                   config=langfuse_config(thread_id=f"demo-{i}", recursion_limit=20))
-        print(f"\nQ: {q}\n  route: {result['route']}\n  A: {result['messages'][-1].content}")
+        print(f"\nQ: {q}\n  route: {result['route']}\n  A: {result['messages'][-1].text}")
     flush()
 
 

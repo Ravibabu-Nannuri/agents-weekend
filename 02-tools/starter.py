@@ -42,7 +42,7 @@ def main():
     with trace_attributes(tags=["block-02", "starter"]):
         result = graph.invoke({"messages": [{"role": "user", "content": q}]},
                               config=langfuse_config(recursion_limit=12))
-    print(result["messages"][-1].content)
+    print(result["messages"][-1].text)
     flush()
 
 

@@ -46,6 +46,8 @@ and **interview Q&A**. Code blocks have a `starter.py` (TODOs) and a `solution.p
 | 08 | [Agents SDK comparison](08-agents-sdk-comparison/) | same agent in the OpenAI Agents SDK | `make b08` |
 | 09 | [Mock interviews](09-mock-interview/) | system-design prompts, rubric, coding drills | – |
 
+**[Learning notes](docs/LEARNING_NOTES.md)**: concepts, trade-offs and interview Q&A for each block, in plain words.
+
 ## Weekend agenda
 **Saturday: build (about 4h)**: 00 → 01 → 02 → 03 → 04 → 05, with 5 minutes of interview Q&A after each block.
 **Sunday: production and interviews (about 3–4h)**: 06 → 07 → 08 → 09 (mock interviews), then each person explains one block as if answering an interviewer.
