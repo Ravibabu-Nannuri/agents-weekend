@@ -47,6 +47,7 @@ and **interview Q&A**. Code blocks have a `starter.py` (TODOs) and a `solution.p
 | 09 | [Mock interviews](09-mock-interview/) | system-design prompts, rubric, coding drills | – |
 
 **[Learning notes](docs/LEARNING_NOTES.md)**: concepts, trade-offs and interview Q&A for each block, in plain words.
+**[Architecture decisions](docs/adr/)**: what to decide when building agent systems, plus ADRs for this repo.
 
 ## Weekend agenda
 **Saturday: build (about 4h)**: 00 → 01 → 02 → 03 → 04 → 05, with 5 minutes of interview Q&A after each block.

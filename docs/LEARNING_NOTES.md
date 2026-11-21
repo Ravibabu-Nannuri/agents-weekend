@@ -205,6 +205,31 @@ The code in this repo is **short-term memory only**. Long-term memory (LangGraph
 
 **Managing short-term memory as it grows:** trim to the last N messages; summarise old turns; promote lasting facts to long-term memory and drop them from history.
 
+## Block 04: Multi-agent
+
+One agent with every tool works for 5 tools, not 40. Block 04 replaces it with a team: a front desk that routes, and specialists that answer.
+
+**Why one big agent breaks down at scale**
+
+| Problem | Why |
+| --- | --- |
+| Wrong tool choices | Many similar tool cards to choose from |
+| Higher cost | Every request carries all the tool cards |
+| One giant prompt | It has to describe every job at once |
+| Hard to own | Different teams (IT, HR) edit the same agent |
+
+**The fix: a router and specialists**
+
+```
+                        +--> kb_agent      (search_kb, check_system_status)
+user --> router --------+--> ticket_agent  (get_ticket, create_ticket, lookup_user)
+      (front desk)      +--> general       (no tools: greetings, off-topic)
+```
+
+- **Router:** reads the question and only decides who handles it. It never answers.
+- **Specialists:** each is the same block 02 loop, with fewer tools and a focused prompt.
+- **Result:** each specialist does one job well; the router's only job is picking the right one.
+
 ## Interview Q&A so far
 
 **Q: What's the difference between an LLM call and an agent?**
