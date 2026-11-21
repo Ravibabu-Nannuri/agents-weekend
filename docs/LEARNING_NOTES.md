@@ -2,6 +2,32 @@
 
 Concepts, trade-offs and interview Q&A for each block of this repo. Last updated Nov 20, 2026.
 
+## Big picture: Langfuse, one platform, four pillars
+
+Langfuse covers four jobs. The workshop uses all of them except prompt management, which is a planned addition to block 06.
+
+| Pillar | What it means | Where we use it |
+| --- | --- | --- |
+| **Observability**: trace every step | Every model call, tool call and graph node recorded as a nested trace | Every block, via `langfuse_config()` |
+| **Metrics**: cost, latency, tokens | Numbers on each generation, rolled up per trace, user and session | Every trace; compared in block 07 |
+| **Evaluation**: score output quality | Datasets, scores, LLM-as-judge, comparing runs | Block 06 (`run_evals.py`) |
+| **Prompt management**: version + deploy prompts | Prompts stored in Langfuse with versions and labels; code fetches the current one | Not yet: `SYSTEM_PROMPT` is hard-coded in `common/helpdesk.py` |
+
+**Open source + self-hostable:** enterprises can run Langfuse inside their own network (e.g. on Kubernetes), so prompts and customer data never leave it.
+
+**Why prompt management matters:** a hard-coded prompt means a code change and redeploy for every wording tweak. With prompt management you store the prompt in Langfuse (e.g. `helpdesk-system`, version 3, label `production`), fetch it with `langfuse.get_prompt(...)`, change or roll back in the UI, and see which prompt version produced each trace. Combined with evals: "v2 scored 0.91 vs v1's 0.84 on the eval set, so promote v2 to production."
+
+## Big picture: LangChain vs LangGraph
+
+LangChain gives you the parts; LangGraph runs them as a graph with state. Same company, designed to work together. Every block in this repo runs on LangGraph.
+
+| Library | Its job | Used for |
+| --- | --- | --- |
+| LangChain | Building blocks | Talking to Claude (`init_chat_model`), messages (`HumanMessage`, `AIMessage`), tools (`@tool`), the `create_agent` shortcut |
+| LangGraph | Running the agent | The graph, state, loop, checkpointer, pause/resume |
+
+**Where LangGraph shows up in the code:** `StateGraph` (boxes and arrows), `MessagesState` (the messages list), `ToolNode` / `tools_condition` (the tools box and the "tool call?" arrow), `InMemorySaver` (checkpointer), and `.compile()`, `.invoke()`, `.get_state()`. `create_agent` is imported from `langchain` but builds a LangGraph graph inside. In Langfuse traces, the `model` and `tools` spans are LangGraph steps.
+
 ## Block 01: What is an agent?
 
 An agent is the same LLM wrapped in a loop that lets it act. The intelligence comes from the model; the agency comes from your code around it.
@@ -79,6 +105,106 @@ Why `flush()` is "usually" optional: the SDK tries to send pending traces automa
 
 **Content blocks:** newer Claude models think before answering, so a reply's `.content` is a list of blocks (`thinking` + `text`). Use `.text` to get just the answer. Thinking tokens are still billed, which matters for cost.
 
+## Block 02: Tools and the agent loop
+
+A tool is a normal Python function that Claude is allowed to ask for. Claude never runs it and never sees its code; it only sees a description card.
+
+**The tool card (built by `@tool`)**
+
+| From the function | Becomes on the card | Example (`check_system_status`) |
+| --- | --- | --- |
+| Function name | Tool name | `check_system_status` |
+| Docstring | What it does and when to use it | "Check whether an IT system is up... Use when a user reports something is broken, before creating a ticket." |
+| Parameters + type hints | Input schema (JSON Schema) | `{'system': {'type': 'string'}}` |
+
+See any card with: `t.name`, `t.description`, `t.args`.
+
+- **Docstrings are instructions to the model, not comments.** A good description says *what* the tool does and *when* to use it (or what to do first).
+- **One sentence changes behaviour.** "Before creating a ticket" makes the agent check for an outage first, instead of opening 200 duplicate tickets when the VPN is down for everyone.
+- **Type hints become the contract.** `system: str` becomes `"type": "string"`. Valid values listed only in the description are a hint; `Literal["email", "vpn", ...]` would enforce them in the schema.
+
+**How Claude uses a tool: it asks, your code does**
+
+1. Your code sends Claude the question plus the tool cards.
+2. Claude replies with a structured request: "call `check_system_status` with `system='vpn'`".
+3. Your code runs the real Python function.
+4. Your code sends Claude everything so far plus the tool's result.
+5. Claude answers the user using that result.
+
+Steps 2 to 4 can repeat several times before step 5. That repetition is the loop that makes it an agent.
+
+**Watching it happen** (`02-tools/one_question.py`):
+
+```
+Step 1  YOU asked:               Is the VPN down right now?
+Step 2  CLAUDE asked for a tool: check_system_status({'system': 'vpn'})
+Step 3  YOUR CODE sent back:     degraded - EU gateway intermittent, fix ETA 2 hours
+Step 4  CLAUDE answered:         Yes, the VPN is currently degraded...
+Model calls in this run: 2       (one to decide, one to answer)
+```
+
+Nobody wrote "if the question mentions VPN, call check_system_status". Claude chose the tool from the question and the cards.
+
+**Why "Claude asks, code does" is safer: least privilege**
+
+| Because your code runs the tool, it can... | Example |
+| --- | --- |
+| Ask a human first | Password reset waits for an admin (block 05) |
+| Check the request | Reject `create_ticket` for an unknown user |
+| Limit what's possible | No delete-user tool means the agent can't delete users, whatever it's asked |
+| Record everything | Every request and result appears in the Langfuse trace |
+
+## Block 03: Memory
+
+Block 03 adds **short-term memory**: the agent remembers within one conversation (thread). The LLM API itself is stateless, so "memory" means your code saves the conversation and re-sends it every turn.
+
+**What we saw:** without memory, "What laptop do I have?" in a new run got "what's your username?". With memory, turn 3 answered "MacBook Pro 14" because turn 1 said "I'm alice". Bob's new thread started blank.
+
+**The code: two additions to the block 02 loop**
+
+| Piece | Code | Job |
+| --- | --- | --- |
+| Checkpointer | `build_tool_agent(..., checkpointer=InMemorySaver())`, attached at `g.compile(checkpointer=...)` | Saves the full state after every step |
+| thread_id | `langfuse_config(thread_id="alice-chat-1")` -> `{"configurable": {"thread_id": ...}}` | Names the conversation: same id = same chat window, new id = blank slate |
+
+- **Only the new message is sent** to `invoke`. The checkpointer loads the saved history and appends it.
+- **One value, two jobs:** the same string is the `thread_id` (LangGraph loads/saves the conversation) and the `session_id` (Langfuse groups traces in the Sessions view).
+- **InMemorySaver** is lost when the script ends. Production uses Postgres, SQLite or Redis savers: same code, different saver.
+- **Stored messages (10 for 3 questions):** user questions, Claude's tool requests, tool results and Claude's answers. All of it is re-sent next turn.
+- **Checkpoints (11):** a snapshot after every graph step, like save points in a game. They enable resume after a crash, pause for approval (block 05), and inspecting any step. `graph.get_state(...)` = latest snapshot; `graph.get_state_history(...)` = all of them.
+- **Hidden cost:** 3 short questions used ~12k tokens and $0.03, because the system prompt, tool cards and growing history are re-sent each turn.
+
+**Bonus observations**
+
+- **Parallel tool calls:** Claude asked for 3 tools in one step (status, KB, user lookup), so the whole run took only 2 model calls.
+- **Docstrings shape behaviour:** "I haven't opened a ticket because the outage already explains the drops" came from "before creating a ticket" in the tool description.
+
+**Reading the Langfuse Sessions page:** the header shows totals for the conversation (traces = turns, time, cost, tokens, user). Left panel = one card per turn. Right panel = the chat. For per-turn tokens, use the Tracing page. Never click "Make Public" on real conversations.
+
+## Kinds of memory in agents
+
+The code in this repo is **short-term memory only**. Long-term memory (LangGraph's Store) is a stretch exercise.
+
+| | Short-term | Long-term |
+| --- | --- | --- |
+| Scope | One conversation (thread) | Across all conversations |
+| Lasts | Until the chat ends | Days, months, forever |
+| Example | "it" = the VPN from 2 messages ago | "alice prefers Slack", learned last week |
+| In LangGraph | Checkpointer + `thread_id` | Store: key-value database by namespace, e.g. `("users", "alice")` |
+| How the model sees it | Whole history re-sent each turn | Code looks up relevant facts and adds them to the prompt |
+
+**Three kinds of long-term memory**
+
+| Kind | Human analogy | Agent example |
+| --- | --- | --- |
+| Semantic (facts) | "Paris is in France" | alice is in Finance, has a MacBook, prefers Slack |
+| Episodic (experiences) | "Last time X worked" | Last month alice's VPN issue was fixed by switching gateway |
+| Procedural (how-to) | Riding a bike | System prompt, tool descriptions, learned rules (links to prompt management) |
+
+**Where memory lives:** in the context window (fast, simple, costs tokens every call, size-limited) or in external storage (database, vector store; unlimited but needs a retrieval step). RAG is long-term semantic memory over documents.
+
+**Managing short-term memory as it grows:** trim to the last N messages; summarise old turns; promote lasting facts to long-term memory and drop them from history.
+
 ## Interview Q&A so far
 
 **Q: What's the difference between an LLM call and an agent?**
@@ -98,3 +224,21 @@ Logs show that a request happened. A trace shows the full chain: the exact promp
 
 **Q: Trace vs span vs generation?**
 A trace is one end-to-end request. Spans are the nested steps inside it. A generation is a span for an LLM call, with model, prompt, completion, tokens and cost.
+
+**Q: How does an LLM "call" a tool?**
+It doesn't run anything. The tool's name, description and input schema are sent with the request. The model replies with a structured tool call (name + arguments). The application runs the function, sends back the result, and calls the model again.
+
+**Q: Why is it safer that the model only requests tool calls?**
+Your code sits in the middle. It can validate the request, require human approval, refuse it, and log it. And the agent can only do what its tools allow: least privilege.
+
+**Q: The agent keeps picking the wrong tool. What do you check first?**
+The tool cards: names, descriptions and input schemas, as seen in the trace. Most wrong-tool bugs are vague or overlapping descriptions, or missing "when to use" guidance.
+
+**Q: How do you persist agent state in production?**
+A checkpointer backed by a durable store (usually Postgres; Redis for speed), keyed by thread ID. Every step is saved, so a crashed run can resume and a paused run can continue hours later on a different pod.
+
+**Q: How would you give an agent memory?**
+Two layers. Short-term: thread-scoped state persisted by a checkpointer, with trimming or summarisation to control context size. Long-term: a separate store for user facts, past episodes and learned procedures, retrieved into the prompt when relevant. The hard parts are deciding what's worth remembering, retrieving the right thing, and privacy: users must be able to see and delete what's remembered.
+
+**Q: The context window keeps growing. What do you do?**
+Trim old messages, summarise earlier turns, keep tool outputs short, and move lasting facts into long-term memory. Watch input tokens per turn in traces to know when it matters.

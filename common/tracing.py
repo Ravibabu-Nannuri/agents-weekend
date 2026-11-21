@@ -14,6 +14,13 @@ Usage:
 import os
 from contextlib import contextmanager, nullcontext
 
+from dotenv import load_dotenv
+
+# Load .env here too, so tracing works even if common.config wasn't imported first.
+# The Langfuse SDK then reads LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_BASE_URL
+# from the environment by itself - we never pass the keys in code.
+load_dotenv()
+
 
 def tracing_enabled() -> bool:
     return bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
