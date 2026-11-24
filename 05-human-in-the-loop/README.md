@@ -40,3 +40,25 @@ approve/deny buttons carrying the thread_id. The button webhook calls the graph 
 **Q: Why not just tell the model in the prompt "always ask before resetting"?**
 A: Prompts are guidance, not enforcement – a model can ignore them or be prompt-injected.
 Safety-critical controls must live in code paths the model can't bypass.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: You approved the reset and a counter in the tool showed the code before `interrupt()` ran twice. Why?**
+On resume, the interrupted node re-runs from the top; `interrupt()` then returns the human's answer. Anything before it (API calls, emails) must be safe to run twice, or moved after the interrupt.
+
+**Q: What happens if you call `interrupt()` with no checkpointer?**
+The first invoke still returns `__interrupt__`, but resuming fails: `RuntimeError: Cannot use Command(resume=...) without checkpointer`. The paused state must be saved somewhere.
+
+**Q: How did you resume the paused run, and why must the thread ID match?**
+`graph.invoke(Command(resume={"approved": True}), config)` with the same `thread_id`. The thread ID is how the checkpointer finds the paused state.
+
+**Q: You denied the reset. What did the model receive, and how did it respond?**
+The tool returned a "DENIED by admin" message as its result, and the model explained it politely and pointed to self-service. A denial is just data to the model.
+
+**Q: How would you make approval work from Slack hours later on a different pod?**
+Durable checkpointer (Postgres), post the interrupt payload with approve/deny buttons carrying the thread ID, and have the button's webhook call `Command(resume=...)`.
+
+**Q: What does the trace look like for a paused and resumed run?**
+The tool span is interrupted, then a later run continues the same session; both parts are grouped by session ID.

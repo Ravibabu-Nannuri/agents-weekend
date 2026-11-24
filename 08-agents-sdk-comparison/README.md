@@ -51,3 +51,22 @@ fastest and move to LangGraph when I need control over flow and state.
 A: Keep the valuable parts framework-independent: tools behind MCP or plain functions, prompts in a
 prompt manager, evals and observability on OpenTelemetry (Langfuse works with both). Then switching
 the orchestration layer is a contained change – exactly what this block did.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: How did you run the OpenAI Agents SDK on Claude?**
+Through its LiteLLM extension: `LitellmModel(model="anthropic/<model>")`, reading `ANTHROPIC_API_KEY`.
+
+**Q: Why call `set_trace_processors([])` before instrumenting?**
+The SDK's default exporter sends traces to OpenAI's dashboard. Removing it avoids duplicate exports (and failures without an OpenAI key); OpenInference then exports spans to Langfuse.
+
+**Q: In the trace, how does a handoff appear?**
+As a tool call (`transfer_to_...`) made by the triage agent. Routing is decided by the model inside the loop, not by your code.
+
+**Q: The guardrail tripped, but the trace shows the triage agent had already started. Why?**
+Input guardrails run in parallel with the agent by default: faster, but some tokens may be spent before the tripwire fires.
+
+**Q: Which was easier to read in Langfuse, and which was easier to change?**
+Answer from your own comparison table: lines of code, LLM calls, latency and cost for the same question, and how you'd add approval before a reset.

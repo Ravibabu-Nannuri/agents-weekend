@@ -47,3 +47,25 @@ judge against human labels.
 **Q: How do you ship a prompt change safely?**
 A: Run the eval suite, compare with the baseline, block the change if key metrics regress
 (like CI tests), then roll out gradually and watch online scores and traces.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: Which evaluator was the most useful, and why not just use the LLM judge for everything?**
+The deterministic ones (`route_correct`, `tool_correct`, `mentions`) are free, fast and exact. The judge only covers what code can't check, and it can be biased.
+
+**Q: An item failed `mentions` but the answer looked fine. What did you check?**
+The exact expected string vs the answer (case, wording like "In Progress"). Often the eval data is too strict, not the agent; fix the dataset, not just the prompt.
+
+**Q: Your scores changed between two runs with no code change. Why?**
+Non-determinism in the agent and the judge. Run more items or repeats, and look at trends, not one run.
+
+**Q: How did you compare a prompt change against the baseline?**
+Run with different `--run-name`s on the same Langfuse dataset and compare runs item by item, then open failing items' traces.
+
+**Q: Why did you give dataset items fixed IDs when uploading?**
+So re-running `--upload` updates items instead of creating duplicates.
+
+**Q: How many items is enough?**
+Start with 15-50 covering each route and tool plus edge cases, then add every real failure you find.

@@ -52,3 +52,19 @@ each person answers 2–3 questions **out loud**, like a screening call. Aim for
 17. **What would you never paste into an AI tool?** Confidential, customer or personal data in an
     unapproved tool. Follow company policy.
 18. **Who is accountable for an AI-assisted decision?** A human. AI assists; people own the outcome.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: You send the same question twice and get two different answers. Is something broken?**
+No. Generation samples tokens, so wording varies run to run, and thinking models vary more. That's why agent tests check facts, routes and tools used, not exact text.
+
+**Q: Roughly how many tokens is your system prompt, and why should you know?**
+Count it (characters / 4 is a fair estimate, or read input tokens of a one-word question in the trace). It's sent on every call, so it's a fixed cost per call; long prompts are the first target for prompt caching.
+
+**Q: The API "remembers" nothing between calls. How did your chatbot remember the user's name?**
+The code re-sent the whole conversation every turn. Memory is the application's job, not the model's.
+
+**Q: What's the first thing you look at when a model "ignores" an instruction?**
+The exact request that was sent (in the trace): was the instruction actually there, in the system role, and not contradicted later in the conversation or by a tool result?

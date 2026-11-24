@@ -28,6 +28,113 @@ LangChain gives you the parts; LangGraph runs them as a graph with state. Same c
 
 **Where LangGraph shows up in the code:** `StateGraph` (boxes and arrows), `MessagesState` (the messages list), `ToolNode` / `tools_condition` (the tools box and the "tool call?" arrow), `InMemorySaver` (checkpointer), and `.compile()`, `.invoke()`, `.get_state()`. `create_agent` is imported from `langchain` but builds a LangGraph graph inside. In Langfuse traces, the `model` and `tools` spans are LangGraph steps.
 
+```mermaid
+flowchart TB
+    LC["<b>langchain</b><br/>create_agent: the prebuilt agent (block 01)<br/><i>the shortcut on top</i>"]
+    LG["<b>langgraph</b><br/>StateGraph, nodes, edges, state, checkpointer<br/><i>the engine that runs it</i>"]
+    CORE["<b>langchain-core</b><br/>messages, @tool, model interface, callbacks<br/><i>shared building blocks</i>"]
+    PROV["<b>langchain-anthropic</b><br/>ChatAnthropic: translates to Claude's API<br/><i>provider plug-in</i>"]
+    LC -- requires --> LG -- requires --> CORE
+    PROV -- requires --> CORE
+    style LG stroke-width:3px
+```
+
+Dependencies run top to bottom: `langchain` requires `langgraph`, and both require `langchain-core`. That's why block 01 ran on LangGraph while importing only `langchain`. Switching to OpenAI swaps only the provider plug-in.
+
+**Short history:** older LangChain (2023-24) had its own agent loop and many abstractions. LangGraph was built to replace it with an explicit, controllable graph. In LangChain 1.0, `create_agent` was rebuilt on LangGraph. Today "LangChain vs LangGraph" means shortcut on top vs engine underneath, not competing tools. LangSmith is the same company's tracing product, an alternative to Langfuse.
+
+## Big picture: LangGraph cheat sheet (StateGraph)
+
+A `StateGraph` works in four phases: define the state, build boxes and arrows, compile, run.
+
+```mermaid
+flowchart LR
+    A["1. Define state<br/>StateGraph(MessagesState)"] --> B["2. Build<br/>add_node / add_edge /<br/>add_conditional_edges"] --> C["3. compile()<br/>checkpointer, name"] --> D["4. Run<br/>invoke / stream / get_state"]
+```
+
+**1. Define the state:** `StateGraph(MessagesState)`. `MessagesState` is a ready-made `messages` list (blocks 02-03); extend it for extra fields, e.g. block 04's `HelpdeskState` adds `route: str`. **Reducers** decide how a node's output merges in: `messages` appends; plain fields like `route` overwrite. So every node returns only what it changed: `{"messages": [reply]}` or `{"route": "kb_agent"}`.
+
+**2. Build** - the four used 90% of the time:
+
+| Method | Plain meaning | Example |
+| --- | --- | --- |
+| `add_node(name, function)` | Add a box; the function gets the state and returns updates | `g.add_node("model", call_model)` |
+| `add_edge(a, b)` | Always go from a to b | `g.add_edge("tools", "model")` (the loop) |
+| `add_conditional_edges(a, decide, options)` | After a, call `decide(state)` to pick the next box | `g.add_conditional_edges("router", lambda s: s["route"], [...])` |
+| `START` / `END` | Special entry and finish names | `g.add_edge(START, "model")` |
+
+`tools_condition` is a ready-made `decide`: tool calls -> `tools`, otherwise -> `END`. Less common: `add_sequence([a, b, c])` (straight chain), `set_entry_point` / `set_finish_point` (older spellings of START/END edges), `set_conditional_entry_point(decide)`.
+
+**3. Compile:** `graph = g.compile(checkpointer=..., name=...)` turns boxes and arrows into a runnable graph and validates it.
+
+| Option | Purpose | Block |
+| --- | --- | --- |
+| `checkpointer=` | Save state after every step (memory, resume, pauses) | 03, 05 |
+| `name=` | Top span name in Langfuse | all |
+| `interrupt_before=[...]` / `interrupt_after=[...]` | Pause before/after a box without code inside it | alternative to 05 |
+| `store=` | Long-term memory across threads | stretch |
+
+**4. Run** - methods on the compiled graph:
+
+| Method | What it does |
+| --- | --- |
+| `invoke(input, config)` | Run to the end, return the final state |
+| `stream(input, config, stream_mode=...)` | Yield results step by step: `"updates"` (what each box changed), `"values"` (full state), `"messages"` (LLM tokens for live typing) |
+| `ainvoke` / `astream` | Async versions for FastAPI and web servers |
+| `batch([...])` | Run several inputs at once |
+| `get_state(config)` | Latest snapshot for a thread |
+| `get_state_history(config)` | Every snapshot (all checkpoints) |
+| `update_state(config, values)` | Edit a saved state, then continue (debugging, time travel) |
+| `get_graph().draw_mermaid()` | Draw the graph |
+
+**Special tools a node can use**
+
+| Thing | What it does | Block |
+| --- | --- | --- |
+| `interrupt(payload)` | Pause inside a node, wait for a human | 05 |
+| `Command(resume=...)` | Resume a paused graph with the human's answer | 05 |
+| `Command(goto="x", update={...})` | Update state and jump to box x, without a conditional edge | alternative to 04 |
+| `Send("node", data)` | Start many parallel copies of a box (map-reduce) | stretch |
+
+**The minimal recipe**
+
+```python
+g = StateGraph(MessagesState)                    # 1 state
+g.add_node("model", call_model)                  # 2 boxes
+g.add_node("tools", ToolNode(tools))
+g.add_edge(START, "model")                       #   arrows
+g.add_conditional_edges("model", tools_condition)
+g.add_edge("tools", "model")
+graph = g.compile(checkpointer=InMemorySaver())  # 3 compile
+graph.invoke({"messages": [...]}, config)         # 4 run
+```
+
+Everything else is a variation: more boxes, more arrows, or a richer state.
+
+**What goes into nodes, and why**
+
+A node is one step of work: a function that receives the state and returns only what it changed. LangGraph runs it, merges the result, saves a checkpoint, and follows the arrows.
+
+| Node type | Job | Calls an LLM? | Repo example |
+| --- | --- | --- | --- |
+| LLM call | Ask the model to reason or answer | Yes | `model` (02) |
+| Tool execution | Run the tools the model asked for | No | `tools` / `ToolNode` (02) |
+| Router / classifier | Decide where to go next | Usually, cheap model | `router` (04) |
+| Guardrail / validation | Check or clean input or output | Sometimes | `redact_secrets` (code), `input_guardrail` (LLM) (07) |
+| Retrieval | Fetch documents or data for context (RAG) | No | KB search before answering |
+| Human-in-the-loop | Pause and wait for approval | No | `reset_password` with `interrupt()` (05) |
+| Sub-agent | Run a whole agent as one step | Yes, inside | `kb_agent`, `ticket_agent` (04) |
+| Deterministic logic | Format, calculate, call an API, apply a policy | No | `tools_with_policy`, `refuse` (07) |
+| Merge / aggregate | Combine parallel results | Sometimes | stretch |
+
+Many nodes call no LLM: good agents are often more code than model, because deterministic steps are cheaper, faster, testable and reliable.
+
+**Why split work into nodes:** each node is its own span in Langfuse (visibility); state is checkpointed after each (resume from the last finished step); routing and pausing happen between nodes; each is a small testable function; nodes can be reused, owned by different teams, or run in parallel.
+
+**How big should a node be?** One responsibility, at the level where you'd want to see it in the trace, route on it, or resume from it. Too big hides failures and redoes everything on a crash; too small makes noisy traces.
+
+**Details:** return only changed fields (`{"route": "kb_agent"}` leaves `messages` alone; `{"messages": [reply]}` appends). A node can also return `Command(goto="x", update={...})` to update state and choose the next node itself.
+
 ## Block 01: What is an agent?
 
 An agent is the same LLM wrapped in a loop that lets it act. The intelligence comes from the model; the agency comes from your code around it.
@@ -105,6 +212,36 @@ Why `flush()` is "usually" optional: the SDK tries to send pending traces automa
 
 **Content blocks:** newer Claude models think before answering, so a reply's `.content` is a list of blocks (`thinking` + `text`). Use `.text` to get just the answer. Thinking tokens are still billed, which matters for cost.
 
+## Block 01: Lessons from hands-on experiments
+
+**Reading the Langfuse trace tree** (Tracing -> click a trace; the Observations page is a flat list for searching across traces):
+
+```
+helpdesk-v1            5.21s               the agent run (name from create_agent)
+ └─ model             5.21s               the graph step (a LangGraph node)
+     └─ ChatAnthropic   5.21s   $0.005896   the actual Claude call
+```
+
+- **A parent's time includes its children.** Walk down to where the time stops shrinking to find the slow part. Here almost all time is the Claude call.
+- **Cost appears only on generations** (LLM calls); other lines are structure.
+- **A graph step vs the model call:** `model` is the box (a function LangGraph runs); `ChatAnthropic` is the call made inside it. Some boxes (tools, guardrail code) make no model call at all.
+- **Back-of-envelope cost:** $0.006 per question x 1,000 a day x 30 = about $180 a month.
+
+**Double counting: one call traced twice.** The Anthropic SDK (2.11+) has built-in OpenTelemetry tracing. Langfuse also uses OpenTelemetry, so it picked up a second generation (`anthropic.messages...`) for the same call, which can double token and cost totals. Langfuse only shows what code sends; the fix is in `.env`: `ANTHROPIC_OPEN_TELEMETRY=false`. Lesson: instrument at one layer only, and sanity-check totals against provider billing.
+
+**Thinking blocks: empty does not mean no thinking.** The reply's first block was `{'type': 'thinking', 'thinking': '', 'signature': '...'}`. Claude did reason; the API returns only an encrypted signature, not the text. The signature lets the reasoning carry into later turns, so don't strip thinking blocks from history. Hidden thinking tokens are still billed and add latency; compare `output_tokens` in `usage_metadata` with the visible answer length (~chars / 4).
+
+**The system prompt is role + context + rules, not just tone.** Replacing it entirely with "Answer like a pirate" changed far more than the accent: the agent forgot it was Example Corp's IT helpdesk, gave consumer VPN advice, and dropped the rules (short answers, use tools, tickets). To change tone only, add a line instead of replacing. This is why prompts are versioned and tested with evals.
+
+**The flush() experiment.** Without `flush()`, a normal exit still delivered the trace (the SDK sends pending data at exit). With `os._exit(0)` (simulating a crash or kill), the trace is lost unless `flush()` runs first.
+
+| How the script ends | Without flush() | With flush() |
+| --- | --- | --- |
+| Normal exit | Trace arrives | Trace arrives |
+| Abrupt exit (crash, kill, serverless freeze) | Trace lost | Trace arrives |
+
+**Message roles:** `system` (developer's rules, most trusted), `user` (the human), `assistant` (the model's earlier replies), `tool` (results, treated as data, not orders). Roles let the model follow, answer and stay consistent, and they're a defence against prompt injection. Claude's API sends the system prompt as a separate field and tool results inside a user turn; LangChain converts this for you.
+
 ## Block 02: Tools and the agent loop
 
 A tool is a normal Python function that Claude is allowed to ask for. Claude never runs it and never sees its code; it only sees a description card.
@@ -153,6 +290,64 @@ Nobody wrote "if the question mentions VPN, call check_system_status". Claude ch
 | Check the request | Reject `create_ticket` for an unknown user |
 | Limit what's possible | No delete-user tool means the agent can't delete users, whatever it's asked |
 | Record everything | Every request and result appears in the Langfuse trace |
+
+**Prebuilt agent vs building your own graph**
+
+The **standard loop** (the ReAct loop: reason, act, observe, repeat) is the same for almost every agent: ask the model, run any tools it requested, repeat until it answers. Frameworks offer it ready-made.
+
+```mermaid
+flowchart LR
+    START((START)) --> model
+    model -- tool call? yes --> tools
+    tools --> model
+    model -- no --> END((END))
+```
+
+| | Prebuilt (`create_agent`) | Your own graph (`StateGraph`) |
+| --- | --- | --- |
+| Code | One line | Five lines: two boxes, three arrows |
+| Gives you | The standard loop only | Any boxes and arrows you add |
+| Use when | A plain tool-using agent | You need routing, approvals, guardrails, parallel steps |
+
+The five lines (`common/graphs.py`): `add_node("model", ...)`, `add_node("tools", ToolNode(...))`, `add_edge(START, "model")`, `add_conditional_edges("model", tools_condition)`, `add_edge("tools", "model")`. The last arrow is the loop: without it, tool results never reach the model and there is no answer.
+
+Every later block is the standard loop plus one custom box or arrow: memory (03), a router before it (04), a pause inside tools (05), guardrails in front (07).
+
+**Same execution, different builder.** Run side by side, both agents executed `model -> tools -> model` and made identical tool choices. Both are LangGraph `CompiledStateGraph` objects, and both sent `[SystemMessage, HumanMessage]` to Claude first. The differences are in who builds the graph and what you can change:
+
+| | Prebuilt (`create_agent`) | Hand-built (`StateGraph`) |
+| --- | --- | --- |
+| System prompt | Pass `system_prompt=`; added before every call | You add it in `call_model` |
+| tools -> model arrow | Conditional: a tool can end the run early | Always back to the model |
+| Adding behaviour | Middleware hooks: before/after model, around each tool call | Your own boxes and arrows anywhere |
+| Visibility | Graph hidden unless drawn | Every box and arrow in your code |
+
+**Where they really differ: `02-tools/prebuilt_vs_custom.py`.** Rule: never create a ticket for a system with a known outage, even if the user insists.
+
+```mermaid
+flowchart LR
+    subgraph PREBUILT["Prebuilt: rule only in the prompt, the MODEL decides"]
+        S1((START)) --> M1[model] --> T1[tools] --> M1b[model] --> E1((END))
+    end
+    subgraph CUSTOM["Hand-built: rule in code, CODE enforces it"]
+        S2((START)) --> M2[model] --> T2[tools_with_policy] --> M2b[model] --> E2((END))
+    end
+    style T2 stroke-width:3px
+```
+
+With the model forced to request `create_ticket(bob, "3rd floor printer broken")`: prebuilt created INC-1004 (rule broken); the custom `tools_with_policy` box returned "BLOCKED BY POLICY" and created nothing (rule held). Same request from the model, different outcome. Real Claude may refuse in the prebuilt version too, but only *usually*; code holds *always*. Nothing changed except the shape of the graph.
+
+**What production systems use**
+
+| Situation | Typical choice |
+| --- | --- |
+| One agent, standard tool loop | Prebuilt agent + middleware |
+| A business process with fixed steps (route, act, approve, notify) | Custom graph |
+| Several agents working together | Custom graph outside, prebuilt agents inside (most common; block 04 is this) |
+
+Decision rule: if the shape of the flow changes (extra steps, branches, parallel work, multiple agents), use a custom graph. If it's the standard loop with extra rules around model or tool calls (approvals, history trimming, retries, fallbacks, the outage rule), prebuilt + middleware can do it in code too.
+
+**Tool groups** (`common/helpdesk.py`): `KB_TOOLS` (knowledge base lookups: `search_kb`, `check_system_status`), `TICKET_TOOLS` (`get_ticket`, `create_ticket`, `lookup_user`), `ALL_TOOLS` = both. Blocks 02-03 give one agent all five; block 04 gives each specialist only its group: fewer cards, better choices, smaller requests, and least privilege (the KB agent cannot create tickets). KB = knowledge base; in real companies, Confluence or ServiceNow articles searched with RAG.
 
 ## Block 03: Memory
 
@@ -204,6 +399,44 @@ The code in this repo is **short-term memory only**. Long-term memory (LangGraph
 **Where memory lives:** in the context window (fast, simple, costs tokens every call, size-limited) or in external storage (database, vector store; unlimited but needs a retrieval step). RAG is long-term semantic memory over documents.
 
 **Managing short-term memory as it grows:** trim to the last N messages; summarise old turns; promote lasting facts to long-term memory and drop them from history.
+
+**What is sent on every call** (seen with `03-memory/watch_messages.py`): each Claude call carries the system prompt + all tool cards (neither is stored in `messages`) + the whole history so far. Tool *results* are stored in `messages` and sent from the call after they were produced. So every call has a fixed overhead plus a growing history; prompt caching targets the fixed part. In the real run, Claude fetched alice's profile in turn 1, so turn 3 answered from history without a tool call.
+
+## Memory: decisions to make and capabilities to build
+
+The block 03 code is short-term memory only. These are the decisions a production agent needs, each a candidate ADR.
+
+**Short-term memory decisions**
+
+| Decision | Options | What to weigh |
+| --- | --- | --- |
+| Where state lives | In-memory, SQLite, Postgres, Redis | Survive restarts? Pauses lasting hours? Multiple pods? |
+| What a thread is | Per chat window, per ticket, per user per day | When should context reset? Mixing topics confuses the model |
+| Context growth | Keep all, trim to last N, summarise old turns, drop old tool results | Cost per turn vs losing details the user refers back to |
+| Retention | Hours, days, until ticket closes | Privacy, storage cost, audit needs |
+
+**Long-term memory decisions**
+
+| Decision | Options | What to weigh |
+| --- | --- | --- |
+| What to remember | Facts (semantic), past episodes, learned rules (procedural) | Only what changes future answers |
+| Who writes it | Agent automatically, on user request, or a background job after each conversation | Automatic is convenient but stores wrong or sensitive things |
+| Scope | Per user, per team, global | Never leak one user's facts into another's answers |
+| Retrieval | Key lookup by user ID, semantic search, both | Accuracy vs cost and latency per request |
+| Conflicts and staleness | Newest wins, timestamps, expiry | "Laptop: MacBook" may be outdated next year |
+| Privacy | What's never stored, user can view and delete | Right to deletion; no secrets, health or financial data |
+
+**Capabilities to build next (in order)**
+
+- [ ] **Durable short-term memory:** swap `InMemorySaver` for `SqliteSaver`; restart the script and continue the same thread.
+- [ ] **History trimming:** keep the last N messages; measure input tokens before and after in Langfuse.
+- [ ] **Summarisation:** when history passes a size limit, replace old turns with a summary message.
+- [ ] **Long-term user facts:** a LangGraph Store keyed `("users", "<name>")`; a new thread for alice still knows her laptop.
+- [ ] **Memory write policy:** decide in code what may be saved (allow-list of fact types; block secrets).
+- [ ] **Memory evals:** test cases that need earlier turns ("what did I say my name was?") and cases where old facts must not leak across users.
+- [ ] **Forget:** a way to delete a thread (`delete_thread`) and a user's stored facts.
+
+Interview angle: "Short-term memory is a checkpointer plus a context-growth strategy. Long-term memory is a product decision: what to remember, who writes it, how it's retrieved, and how users delete it."
 
 ## Block 04: Multi-agent
 
@@ -267,3 +500,15 @@ Two layers. Short-term: thread-scoped state persisted by a checkpointer, with tr
 
 **Q: The context window keeps growing. What do you do?**
 Trim old messages, summarise earlier turns, keep tool outputs short, and move lasting facts into long-term memory. Watch input tokens per turn in traces to know when it matters.
+
+**Q: How do LangChain and LangGraph relate?**
+langchain-core provides the shared abstractions: messages, tools, model interface, callbacks. LangGraph is the stateful runtime built on them. LangChain's `create_agent` is a prebuilt agent on LangGraph. I use the prebuilt agent for standard loops and drop to LangGraph when I need custom flow, checkpointing or human-in-the-loop.
+
+**Q: Your traces show double the expected cost. What do you check?**
+Whether the same call is instrumented twice, e.g. by the framework's callback and by the provider SDK's own OpenTelemetry tracing. Instrument at one layer and reconcile totals with the provider's billing.
+
+**Q: Prebuilt agent or custom graph in production?**
+I start with the prebuilt agent and add middleware for policies like approvals and history trimming. I move to a custom graph when the topology changes: routing, multi-agent, parallel branches, or explicit workflow steps. In practice it's usually a custom orchestration graph with standard agents as nodes.
+
+**Q: A business rule must never be broken. Prompt or code?**
+Code. A prompt rule holds usually; the model decides. Enforce it where the model can't bypass it: in the tool, a custom tools box, or middleware around the tool call.

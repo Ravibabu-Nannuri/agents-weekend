@@ -16,23 +16,30 @@ from common.tracing import flush, langfuse_config, trace_attributes
 
 
 def build_agent(llm=None):
-    # TODO 1: return create_agent(...) with the model from get_llm(),
-    #         no tools, and SYSTEM_PROMPT as the system prompt.
-    raise NotImplementedError
+    return create_agent(
+        model=llm or get_llm(),
+        tools=[],
+        system_prompt=SYSTEM_PROMPT,
+        name="helpdesk-v1",
+    )
+
 
 
 def main():
     agent = build_agent()
     question = "My VPN keeps disconnecting. What should I do?"
 
-    with trace_attributes(tags=["block-01"], user_id="alice"):
+    with trace_attributes(tags=["ravi-01"], user_id="Ravi"):
         # TODO 2: call agent.invoke with {"messages": [...]} and
         #         config=langfuse_config() so the run is traced.
-        result = ...
+        result = agent.invoke(
+                    {"messages": [{"role": "user", "content": question}]},
+                    config=langfuse_config(),
+                )
 
     print("A:", result["messages"][-1].text)
     # TODO 3: why do we need this line? (hint: short scripts)
-    flush()
+    #flush()
 
 
 if __name__ == "__main__":

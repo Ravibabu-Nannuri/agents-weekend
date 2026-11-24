@@ -45,3 +45,28 @@ errors instead of hanging, and alerting on traces with unusually many steps.
 **Q: Prebuilt agent vs hand-built graph – when would you use each?**
 A: Prebuilt for a standard tool-calling loop. Hand-built when you need custom routing,
 extra steps (validation, approval, guardrails), or parallel branches – which is most production systems.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: Claude asked for three tools in one step. How many model calls did the run take, and why does it matter?**
+Two: one to request all three tools (parallel tool calls), one to answer. Fewer model calls means lower latency and cost than calling tools one at a time.
+
+**Q: What happens if you delete `g.add_edge("tools", "model")`?**
+The run stops after the tools box. The tool results never reach the model, so there is no final answer.
+
+**Q: You set `recursion_limit=2`. What error do you get, and when do you want it?**
+`GraphRecursionError: Recursion limit of N reached without hitting a stop condition`. It's the safety net against an agent looping forever; production code catches it and returns a graceful failure.
+
+**Q: The model asks for a tool name that doesn't exist. What does `ToolNode` do?**
+It returns an error tool message like "Error: delete_user is not a valid tool, try one of [...]" so the model can correct itself, instead of crashing.
+
+**Q: A tool raises an exception (e.g. a backend timeout). What happens by default, and what would you change?**
+In this version the exception propagates and the run fails. For production, catch errors inside tools (or configure the tool node's error handling) and return a clear message the model can act on, plus retries with timeouts.
+
+**Q: You asked the agent to open a ticket for bob for the broken printer and it refused. Why, and is that right?**
+The prompt and tool description say not to ticket known outages, so it checked status first and followed policy over the user. Fine as guidance, but if it must never happen, enforce it in code (see `prebuilt_vs_custom.py`).
+
+**Q: Prebuilt and hand-built gave identical tool choices. So what's the point of building your own graph?**
+Same shape, same behaviour. The difference appears when the shape changes: a custom `tools_with_policy` box enforced the outage rule in code every time, while the prebuilt agent left it to the model.

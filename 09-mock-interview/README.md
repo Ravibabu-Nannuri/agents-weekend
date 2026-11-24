@@ -49,3 +49,27 @@ Also common: 45–60 min live coding. Practise with these, using this repo:
 - Add an `account_agent` with `reset_password` approval to the block 04 supervisor (block 05 stretch).
 - Add an **output** guardrail that blocks answers mentioning internal hostnames.
 - Make block 03 trim history to the last 6 messages and show the token savings in Langfuse.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+Use these as follow-ups after any design answer. They separate people who have built agents from people who have read about them.
+
+**Q: Show me a trace of your agent and walk me through it.**
+Be ready to open one: trace, spans, generations, where time and cost went.
+
+**Q: What's the most surprising thing you saw in your traces?**
+Have a real answer, e.g. the duplicate generation from SDK-level tracing, or hidden thinking tokens.
+
+**Q: What broke when you first ran it, and how did you find out?**
+E.g. the `temperature` error on a newer model, swapped Langfuse keys, or raw content blocks printed instead of text.
+
+**Q: What's your agent's cost per request, and how did you measure it?**
+A number from Langfuse and the multiplication to a monthly estimate.
+
+**Q: Give an example where the agent did something you didn't expect.**
+E.g. refusing to create a requested ticket during an outage because of the tool description.
+
+**Q: What error do you get with a checkpointer but no thread ID? With interrupt but no checkpointer?**
+Quick recall of real errors signals real usage (see blocks 03 and 05).

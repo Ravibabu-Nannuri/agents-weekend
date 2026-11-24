@@ -50,3 +50,25 @@ a fallback route, and an eval dataset measuring routing accuracy on every prompt
 **Q: How do agents share context?**
 A: Through shared graph state (here, the message list and `route`). You decide what each
 specialist sees – full history, a summary, or just the task – which is a cost and privacy decision.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: How do you know why the router picked a specialist?**
+The `reason` field in the `Route` structured output appears in the router generation in Langfuse. It costs a few tokens and saves debugging time.
+
+**Q: Why is `agent` a `Literal[...]` and not a `str`?**
+With `str` the model can invent a route name ("network_agent") and the conditional edge has nowhere to go. A `Literal` restricts output to valid node names.
+
+**Q: What share of total cost per request is the router in your traces?**
+Read it off the trace: router generation cost vs specialists. On a cheap model it should be a small fraction; if not, the routing prompt or history is too large.
+
+**Q: You made the Route descriptions vague. What happened?**
+Misroutes increase (e.g. ticket questions to the KB agent). Block 06 measures this automatically as `route_correct`.
+
+**Q: "Is VPN down, and what's the status of INC-1001?" What does your router do?**
+It picks one specialist, so half the question goes unanswered. That's the limit of a router; a supervisor that calls several specialists as tools handles it.
+
+**Q: The specialist sees the whole conversation. Is that always right?**
+No. It's a cost and privacy decision: you could pass only the latest question or a summary.

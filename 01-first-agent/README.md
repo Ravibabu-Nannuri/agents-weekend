@@ -40,3 +40,25 @@ debug non-deterministic behaviour.
 **Q: What's in a trace vs a span vs a generation?**
 A: A trace is one end-to-end request. Spans are the steps inside it (nested). A generation is a
 span for an LLM call, with model, prompt, completion, tokens and cost.
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: You printed `result["messages"][-1].content` and got a list with a `thinking` block whose text was empty. What does that tell you?**
+The model did reason, but the API returned only an encrypted signature, not the reasoning text. The tokens are still billed. Use `.text` for the answer and keep thinking blocks in history so later turns stay consistent.
+
+**Q: Your Langfuse cost looked about twice what you expected. What did you find?**
+Each Claude call appeared twice: a `ChatAnthropic` generation from LangChain's callback and an `anthropic.messages` generation from the Anthropic SDK's own OpenTelemetry tracing. Fix: `ANTHROPIC_OPEN_TELEMETRY=false`. Lesson: instrument one layer.
+
+**Q: You removed `flush()` and the trace still appeared. So is it useless?**
+No. On a normal exit the SDK sends pending data automatically. With `os._exit(0)` (simulating a crash or a serverless freeze) the trace was lost unless `flush()` ran first.
+
+**Q: A newer model rejected your request with "temperature is deprecated". How did you fix it without breaking other providers?**
+Only send `temperature` when explicitly asked: build the kwargs dict conditionally and unpack it with `**kwargs`.
+
+**Q: In the trace tree, `helpdesk-v1`, `model` and `ChatAnthropic` all showed 5.21s. What does that tell you?**
+Parent times include children, so nearly all latency was the model call itself, not LangGraph or your code.
+
+**Q: You replaced the system prompt with "Answer like a pirate". What changed besides the tone?**
+The agent lost its role, context and rules: it gave consumer VPN advice and forgot tickets and outages. The system prompt is the agent's job description, so changes need evals.

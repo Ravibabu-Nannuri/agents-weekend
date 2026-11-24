@@ -54,3 +54,25 @@ for sensitive actions, validate outputs, and monitor traces for anomalies.
 **Q: Where should PII redaction happen?**
 A: Before anything leaves your boundary – before the LLM call *and* before traces are exported.
 (Langfuse supports a `mask` function on the client for exactly that.)
+
+## Hands-on interview questions
+
+Questions only someone who has run and broken this code can answer well. Try each one yourself before reading the answer.
+
+**Q: How did you prove the model never saw the user's password?**
+Open the router and guardrail generations in the trace: the input shows `[REDACTED]`. Redaction ran in code before any model call.
+
+**Q: How does the redaction node replace the message instead of adding a new one?**
+It returns a new `HumanMessage` with the same `id`; the `add_messages` reducer replaces messages with matching IDs.
+
+**Q: How many model calls does a blocked prompt-injection request cost?**
+One cheap guardrail call; the router and specialist never run. Read it off the trace.
+
+**Q: What did config A (cheap guard + router) vs config B (main model everywhere) show?**
+Compare cost and latency per question in the terminal table and in Langfuse; the guard and router are a meaningful share of calls, so routing them to a small model cuts cost without changing answers.
+
+**Q: Your guardrail blocked a legitimate question. What do you do?**
+Add it to an eval set as a must-pass case, adjust the classifier prompt or categories, and measure false-positive rate, not just catches.
+
+**Q: Where is most of the latency in a normal request?**
+In the specialist's model calls (and thinking), not the guardrail or tools. The trace tree shows it.
