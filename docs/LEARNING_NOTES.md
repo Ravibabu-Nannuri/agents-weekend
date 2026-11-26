@@ -135,6 +135,52 @@ Many nodes call no LLM: good agents are often more code than model, because dete
 
 **Details:** return only changed fields (`{"route": "kb_agent"}` leaves `messages` alone; `{"messages": [reply]}` appends). A node can also return `Command(goto="x", update={...})` to update state and choose the next node itself.
 
+
+## Big picture: production readiness checklist
+
+Blocks 01-09 cover the core of agent engineering. Production adds serving, durability, reliability and operations; autonomy adds planning and background work. Tick items as the repo gains them.
+
+**Covered**
+
+- [x] Agent loop, tools, tool design (01-02)
+- [x] State, checkpointing, short-term memory (03)
+- [x] Multi-agent routing (04)
+- [x] Human-in-the-loop approvals (05)
+- [x] Evals: deterministic checks + LLM judge (06)
+- [x] Guardrails, cost, latency (07)
+- [x] Framework comparison (08)
+- [x] Observability: traces, sessions, cost (all blocks)
+- [x] Architecture decisions: ADR guide + 4 ADRs
+
+**Production gaps**
+
+- [ ] Serving: FastAPI, async, streaming responses (block 10)
+- [ ] Durable state: Postgres checkpointer (block 10)
+- [ ] Containers and scaling: Docker, multiple workers resuming the same threads (block 10)
+- [ ] Reliability: timeouts, retries, fallback model, tool error handling (block 11)
+- [ ] Prompt management: versioned prompts fetched from Langfuse (block 11)
+- [ ] CI/CD with an eval gate: block changes that lower scores (block 12)
+- [ ] Online monitoring: alerts on cost, errors, step counts; scoring sampled production traces (block 12)
+- [ ] Security: auth, acting on the user's behalf, secrets in a vault, PII masking in traces
+
+**Autonomy gaps** (the repo is reactive: one request, one answer)
+
+- [ ] Planning: break a goal into steps, track progress, re-plan on failure (block 13)
+- [ ] Long-running and background work: triggered by events or schedules, survives restarts (block 13)
+- [ ] Self-checking / reflection before finishing (block 13)
+- [ ] Budgets and stop conditions: limits on steps, time and spend per task (block 13)
+- [ ] Long-term memory across conversations
+- [ ] Tools via MCP
+
+**Planned blocks**
+
+| Block | Builds | Covers |
+| --- | --- | --- |
+| 10 - Serving and durability | FastAPI + streaming + durable checkpointer + Docker Compose with Postgres | Serving, durable state, containers |
+| 11 - Reliability and prompt management | Retries, timeouts, fallback model; prompts from Langfuse by version | Reliability, prompt management |
+| 12 - CI eval gate and monitoring | GitHub Actions running evals, failing on score drops; alert rules | CI/CD, monitoring |
+| 13 - Autonomous task agent | Plan -> execute -> check -> re-plan, in the background with a budget, plus long-term memory | Planning, background work, reflection, budgets |
+
 ## Block 01: What is an agent?
 
 An agent is the same LLM wrapped in a loop that lets it act. The intelligence comes from the model; the agency comes from your code around it.
@@ -462,6 +508,65 @@ user --> router --------+--> ticket_agent  (get_ticket, create_ticket, lookup_us
 - **Router:** reads the question and only decides who handles it. It never answers.
 - **Specialists:** each is the same block 02 loop, with fewer tools and a focused prompt.
 - **Result:** each specialist does one job well; the router's only job is picking the right one.
+
+## Block 05: Human-in-the-loop
+
+The agent may propose a risky action, but code makes it wait for a human. One run becomes two `invoke` calls: the first ends in a pause, the second resumes it, possibly days later.
+
+**The six components** (`05-human-in-the-loop/solution.py`)
+
+| # | Component | In the code | Job | Without it |
+| --- | --- | --- | --- | --- |
+| 1 | `interrupt(payload)` in the risky tool | `reset_password` | Stops at the exact point approval is needed; hands the human what/who/why | The action runs with no approval |
+| 2 | Checkpointer | `checkpointer=InMemorySaver()` | Saves the paused state | Resume fails: `Cannot use Command(resume=...) without checkpointer` |
+| 3 | `thread_id` | `langfuse_config(thread_id=...)` | Names the paused run so the resume finds it | Resume can't find the state |
+| 4 | Pause detection | `while "__interrupt__" in result` | Notices the stop, reads the payload | A paused run looks finished |
+| 5 | Approver | `ask_human(payload)` | Shows the payload, returns `{"approved": ...}` | No decision to resume with |
+| 6 | `Command(resume=decision)` | `graph.invoke(Command(resume=...), config)` | Continues the run; `interrupt()` returns the decision | Run stays paused forever |
+
+To remember: the tool pauses (1), the checkpointer saves (2) under a thread_id (3); the caller notices (4), asks a human (5), and resumes (6).
+
+```mermaid
+flowchart TB
+    subgraph I1["invoke #1"]
+        Q[Question<br/>reset my password] --> M1[model<br/>requests reset tool] --> T1[tools: pause<br/>interrupt stops]
+    end
+    T1 -- "saved: next = tools, plus payload" --> H[Human decides<br/>seconds or days later]
+    H -- "Command(resume=decision)" --> T2
+    subgraph I2["invoke #2 (same thread_id)"]
+        T2[tools: re-runs<br/>reset happens once] --> M2[model<br/>writes the answer] --> E((END))
+    end
+    style H stroke-width:3px
+```
+
+The model is not called again on resume: the run continues at the saved `next = tools` and re-runs that box.
+
+**The flow of both invoke calls** for "I'm bob, please reset my password":
+
+| Step | Call | Box | What happens | Saved? |
+| --- | --- | --- | --- | --- |
+| 1 | invoke #1 | (load) | New thread; state = the question | |
+| 2 | | model | Claude call #1 asks for `reset_password(bob)` | Yes |
+| 3 | | tools | `interrupt()` stops the node; nothing is reset | Yes, `next = ("tools",)` + payload |
+| 4 | | - | `invoke` returns early with `__interrupt__` and the payload; no answer yet | |
+| - | (human) | - | Admin decides `{"approved": True}`: seconds or days | |
+| 5 | invoke #2 | (load) | Same thread_id; resumes at `next = tools`, skipping the model | |
+| 6 | | tools | Tool re-runs from the top; `interrupt()` now returns the decision; reset happens once | Yes |
+| 7 | | model | Claude call #2 writes the answer from the tool result | Yes |
+| 8 | | - | Final state: Human, AI(tool call), Tool(reset done), AI(answer) | |
+
+**Counts:** 2 invokes, 2 Claude calls (the resume adds none), and the tools box runs twice. If Claude first calls `lookup_user`, that adds one more model -> tools round before step 3. A denial changes only step 6: the tool returns "DENIED by admin", and Claude explains it in step 7.
+
+**Rules that matter**
+
+- **The node re-runs on resume.** Code before `interrupt()` runs twice (verified: a counter went 1 -> 2). Put side effects (emails, API calls, the action itself) after the interrupt.
+- **Checkpointer + same thread_id are required** for resume. The pause can even appear to work without a checkpointer; the resume is what fails.
+- **Approval is enforced in code, not the prompt.** The prompt never says "ask first"; the tool simply can't act without a human answer.
+- **A denial is just data** to the model: a tool result it explains to the user.
+
+**Demo vs production:** components 1-4 stay the same. The checkpointer becomes Postgres (block 10). The approver becomes Slack buttons or a web UI, and the resume becomes a webhook or API endpoint that calls `Command(resume=...)` with the stored thread_id, possibly hours later on a different server.
+
+Watch it in `notebooks/05-human-in-the-loop.ipynb`: cell 2 is invoke #1 (`paused? True`, `will continue at: ('tools',)`), cell 3 is invoke #2.
 
 ## Interview Q&A so far
 

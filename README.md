@@ -45,8 +45,10 @@ and **interview Q&A**. Code blocks have a `starter.py` (TODOs) and a `solution.p
 | 07 | [Guardrails, cost, latency](07-cost-latency-guardrails/) | redaction, input classifier, model routing | `make b07` |
 | 08 | [Agents SDK comparison](08-agents-sdk-comparison/) | same agent in the OpenAI Agents SDK | `make b08` |
 | 09 | [Mock interviews](09-mock-interview/) | system-design prompts, rubric, coding drills | – |
+| 10 | [Serving and durability](10-serving/) | FastAPI, streaming, durable checkpointer, Docker + Postgres | `make serve` |
 
 **[Learning notes](docs/LEARNING_NOTES.md)**: concepts, trade-offs and interview Q&A for each block, in plain words.
+**[Walkthrough notebooks](notebooks/)**: run blocks 01-05 one step per cell and inspect the state between steps.
 **[Architecture decisions](docs/adr/)**: what to decide when building agent systems, plus ADRs for this repo.
 
 ## Weekend agenda

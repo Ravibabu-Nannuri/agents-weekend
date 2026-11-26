@@ -1,6 +1,6 @@
 PY := .venv/bin/python
 
-.PHONY: setup check test b01 b02 b03 b04 b05 b06 b07 b08
+.PHONY: setup check test b01 b02 b03 b04 b05 b06 b07 b08 serve demo compose
 
 setup:            ## create venv + install everything
 	python3 -m venv .venv
@@ -22,3 +22,12 @@ b05: ; $(PY) 05-human-in-the-loop/solution.py
 b06: ; $(PY) 06-evals/run_evals.py --upload --run-name baseline
 b07: ; $(PY) 07-cost-latency-guardrails/solution.py
 b08: ; $(PY) 08-agents-sdk-comparison/helpdesk_agents_sdk.py
+
+serve:   ## block 10: run the API locally (SQLite checkpointer)
+	.venv/bin/uvicorn app:app --app-dir 10-serving --reload --port 8000
+
+demo:    ## block 10: call the running API
+	$(PY) 10-serving/client_demo.py
+
+compose: ## block 10: API + Postgres in Docker
+	cd 10-serving && docker compose up --build
