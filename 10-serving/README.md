@@ -64,6 +64,7 @@ cd 10-serving && docker compose up --build
 | POST | `/chat/stream` | One turn as Server-Sent Events: `tool_call`, `tool_result`, `token`, `done` |
 | GET | `/threads/{id}` | The stored conversation |
 | DELETE | `/threads/{id}` | Forget a conversation (right to deletion) |
+| POST | `/feedback` | Thumbs up/down on an answer (`trace_id` from `/chat`), stored as a Langfuse score |
 | GET | `/health` | Liveness + which checkpointer is active |
 
 ## What to look at in Langfuse
@@ -82,6 +83,57 @@ cd 10-serving && docker compose up --build
 - **Streaming is about perceived latency.** Total time is the same; users see the first words in about a second
   instead of waiting for the whole answer.
 - **Limits per request.** `MAX_STEPS` (recursion limit) and input validation (message length) protect cost and uptime.
+
+## Online evaluation demo: score live traffic
+
+Offline evals (block 06) score a fixed test set. **Online evaluation** scores real traffic as it arrives, with
+two signals side by side: an **LLM judge** run by Langfuse, and **user feedback** (👍/👎) sent by your app.
+
+**What the API does for this**
+- Each `/chat` turn creates a clean **`chat-turn`** observation: input = the question, output = the answer.
+  LangGraph's steps nest under it, so one turn = one trace. This is what the judge will score.
+- `/chat` returns a **`trace_id`**. The client sends it to **`POST /feedback`** with `thumbs_up: true/false`,
+  which stores a `user_feedback` score on that trace.
+
+**1. Connect a judge model in Langfuse** (once)
+Project **Settings → LLM Connections** → add your Anthropic key. The judge model must support structured
+output; a small model (e.g. `claude-haiku-5-5`) keeps it cheap.
+
+**2. Create the evaluator** (how to score)
+**Evaluators → New evaluator** → pick a template such as *Helpfulness*, or start blank with a prompt like:
+```
+You are grading an IT helpdesk assistant.
+Question: {{input}}
+Answer: {{output}}
+Score 0 to 1: 1 = correct, specific and actionable; 0.5 = partly helpful; 0 = wrong or unhelpful.
+Politely refusing an off-topic or unsafe request deserves 1. Give a one-sentence reason.
+```
+Use **Test** on a few existing `chat-turn` observations to check the scores look sensible before saving.
+
+**3. Attach a rule** (what to score)
+Target **live observations**, filter **name = `chat-turn`**, map `{{input}}` → observation input and
+`{{output}}` → observation output. Sampling: 100% for the demo (in production, often 5–20% to control cost).
+Langfuse shows an estimated cost before you save.
+
+**4. Send live traffic**
+```bash
+make serve                                         # terminal 1
+.venv/bin/python 10-serving/live_traffic.py 30     # terminal 2
+```
+30 requests from 5 users, with normal, messy and bad questions, and random 👍/👎.
+
+**5. What to show your friends in Langfuse**
+- **Tracing:** the scores column fills in as the judge runs; filter by `user_feedback = 0` to see unhappy users.
+- Open a low-scored trace: read the judge's reason, then the trace tree, to see *why* the answer was weak.
+- Compare the two signals: where does the judge disagree with the user? That's where the judge prompt or the agent needs work.
+- **Sessions / Users / Dashboards:** traffic, cost per user, latency, scores over time.
+- The judge's own calls are traced too, under the environment **`langfuse-llm-as-a-judge`**: you can audit the judge.
+
+**6. Close the loop**
+Pick 3 low-scored traces and add them to the block 06 dataset (Langfuse: *Add to dataset* on the trace),
+then re-run `run_evals.py`. Production failures become regression tests.
+
+Note: the Langfuse UI evolves; menu names may differ slightly from these steps.
 
 ## Known gaps (on purpose, for later blocks)
 

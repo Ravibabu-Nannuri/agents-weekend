@@ -568,6 +568,146 @@ The model is not called again on resume: the run continues at the saved `next = 
 
 Watch it in `notebooks/05-human-in-the-loop.ipynb`: cell 2 is invoke #1 (`paused? True`, `will continue at: ('tools',)`), cell 3 is invoke #2.
 
+## Block 06: Evals
+
+An eval is a fixed set of questions with expected outcomes, plus scorers, run on every change. Evals are the unit tests of agent behaviour: they catch "the code works, but the agent got worse".
+
+### Evals essentials
+
+**1. Offline vs online**
+
+| | Offline evals | Online evals |
+| --- | --- | --- |
+| When | Before release: every PR, merge, nightly | After release, on live traffic |
+| Data | A fixed dataset you wrote (+ past failures) | Real user requests, often a 5-20% sample |
+| Expected answer known? | Yes: route, tools, facts to mention | No: only the question and the answer |
+| Scorers | Code checks + LLM judge | LLM judge + user feedback (thumbs up/down) + ops metrics |
+| Answers the question | "Is this change safe to ship?" | "How is it doing for real users right now?" |
+| Catches | Regressions from prompt, model or code changes | New kinds of questions, drift, failures the dataset missed |
+| In this repo | `06-evals/run_evals.py` | `10-serving`: `chat-turn` + Langfuse judge rule + `/feedback` |
+
+They feed each other: online failures become new offline test cases.
+
+**2. Kinds of evals**
+
+By what is measured:
+
+| Kind | Question it answers | Example |
+| --- | --- | --- |
+| Final answer | Is the answer correct and helpful? | `mentions`, `helpfulness` |
+| Trajectory | Did it take the right path? | `route_correct`, `tool_correct`, step count |
+| Single step | Is one component right? | Router accuracy alone; one tool's output |
+| Safety | Did it avoid what must never happen? | `forbidden_tools`, `no_pii_leak`, prompt-injection cases |
+| Operational | Is it affordable and fast? | Cost per request, p95 latency, error rate |
+| Regression | Did old bugs stay fixed? | `regressions.jsonl` |
+
+By who or what scores:
+
+| Method | Strength | Weakness |
+| --- | --- | --- |
+| Code checks | Free, fast, exact | Only for things code can verify |
+| LLM judge | Scores nuance (helpfulness, tone) at scale | Biased, inconsistent; needs calibration |
+| Human review | Ground truth | Slow and expensive; used to calibrate judges |
+| User feedback | Real satisfaction signal | Sparse, noisy, only after release |
+
+**3. Production workflow**
+
+```mermaid
+flowchart LR
+    B["1. Build a change<br/>prompt, model, tool or code"] --> O["2. Offline gate in CI<br/>smoke + full + regression"]
+    O --> D["3. Deploy gradually<br/>staging, then canary"]
+    D -- release --> ON["4. Online evals<br/>judge, user feedback, alerts"]
+    ON --> T["5. Triage<br/>read low-scored traces"]
+    T --> G["6. Grow the dataset<br/>failures into regression set"]
+    G -- "next change is tested on them" --> B
+    style G stroke-width:3px
+```
+
+1. **Build** a change: prompt, model, tool or code.
+2. **Offline gate in CI:** unit tests + smoke evals on the PR; full + regression evals on main; fail if below floor or worse than baseline.
+3. **Deploy gradually:** staging -> smoke evals on the deployed service -> canary (small % of traffic).
+4. **Online evals:** judge on sampled live traffic + user feedback + cost/latency/error dashboards and alerts.
+5. **Triage:** review low-scored and thumbs-down traces; decide if the agent or the judge is wrong.
+6. **Grow the dataset:** add real failures to the regression set, fix, and start again at step 1.
+
+Nightly offline runs catch model or provider drift even when no code changed.
+
+**Two-minute teaching sheet**
+
+1. **Why:** agents are non-deterministic; a prompt tweak can silently break things. "It looked fine when I tried it" doesn't scale.
+2. **Measure three things:** the answer (right facts, helpful), the path (route, tools, step count), ops (cost, latency, errors).
+3. **Code checks first** (`route_correct`, `tool_correct`, `mentions`): free, fast, exact. **LLM judges second**, only for what code can't check; they can be biased, so read their reasons.
+4. **The loop:** change -> run evals -> compare to baseline -> keep or revert.
+5. **Offline vs online:** a test dataset before release (block 06); live traffic scored by a judge plus users' thumbs up/down after release (block 10). Production failures get added to the dataset.
+6. **Practical rules:** thresholds, not exact matches; trust trends, not one run; start with 20-50 items and grow from real failures.
+
+One sentence: code checks first, LLM judges second, compare every change to a baseline, and turn every production failure into a test.
+
+**Our baseline run**
+
+| Score | Result | Meaning |
+| --- | --- | --- |
+| `route_correct` | 1.000 | All 16 questions went to the expected specialist |
+| `tool_correct` | 1.000 | Each specialist called the expected tool |
+| `mentions` | 1.000 | Every answer contained the required facts |
+| `helpfulness` | 3.625 / 5 | The judge finds answers OK but not great |
+
+Perfect scores mean the dataset is too easy: it can't catch regressions. Add ambiguous ("my laptop is slow"), two-part, typo, policy-edge and unknown-data cases. The only real signal is helpfulness, so read the judge's reasons on the lowest items and decide whether the agent or the judge is wrong.
+
+**Evals vs unit tests**
+
+| | Unit tests (`tests/`) | Evals (`06-evals/`) |
+| --- | --- | --- |
+| Checks | Wiring: routes, loop, interrupt, API | Behaviour and quality: routing, tool choice, answers |
+| Model | Fake: free, deterministic | Real: costs money, varies run to run |
+| Outcome | Pass / fail, exact | Scores against thresholds |
+| Flakiness | A bug | Expected; judge by averages and trends |
+
+Pyramid: many fast unit tests at the bottom, offline evals in the middle, a few online evals on sampled production traffic at the top.
+
+**How the judge fits into the flow** (per test case):
+
+```mermaid
+flowchart LR
+    D[dataset case] --> A["1. run the AGENT<br/>answer, route, tools, steps"]
+    A --> C["2. code checks<br/>deterministic.py"]
+    A --> J["3. judge (judges.py)<br/>2nd model reads question + answer<br/>score + reason"]
+    C --> R["4. record scores + reason<br/>Langfuse + results.json"]
+    J --> R
+    R --> G["after all cases: compare.py<br/>vs baseline.json + thresholds.yaml<br/>pass / fail"]
+```
+
+The judge only reads the question and answer, like a teacher grading a paper; it never re-runs the agent. Each case costs an agent call plus a judge call, so judges use a cheap pinned model and PRs run a small smoke set. Optional saver: skip the judge when code checks already failed. The same judge prompt serves offline evals, online evals in Langfuse, and calibration against ~30 human-labelled examples.
+
+**A production `evals/` folder**
+
+| File | Holds | Sample |
+| --- | --- | --- |
+| `datasets/smoke.jsonl` | ~20 cases, every PR; one JSON object per line | `{"id": "tkt-status", "input": "What's the status of INC-1001?", "expected": {"route": "ticket_agent", "tools": ["get_ticket"], "must_mention": ["In Progress"]}}` |
+| `datasets/full.jsonl` | 200+ cases incl. typos, multi-turn, two-part | same format, input can be a message list |
+| `datasets/regressions.jsonl` | Real production failures, never deleted | adds `source_trace`, `found_by`, `added` |
+| `evaluators/deterministic.py` | Small functions: case in, score out | `route_correct`, `tools_called`, `forbidden_tools`, `mentions`, `no_pii_leak`, `step_count` |
+| `evaluators/judges.py` | Judge prompts, rubrics, structured score, pinned judge model | 5 = specific and actionable, 3 = vague, 1 = wrong; refusing off-topic = 5 |
+| `thresholds.yaml` | Floor (`min`) and allowed drop vs baseline (`max_drop`) per metric | `route_correct: {min: 0.95, max_drop: 0.00}`; safety metrics `min: 1.00` |
+| `baseline.json` | Last accepted scores from main, plus model and prompt version | written after a successful main run |
+| `run_evals.py` | Load dataset -> run agent -> apply evaluators -> upload to Langfuse -> results.json | `--dataset smoke --run-name pr-142` |
+| `compare.py` | The gate: fail if below `min` or dropped more than `max_drop`; prints the PR table | exit code 1 blocks the merge |
+
+**CI/CD pipelines**
+
+| Pipeline | Trigger | Runs | Blocks on |
+| --- | --- | --- | --- |
+| `pr.yml` | Every PR | Lint, unit tests, smoke evals, compare, PR comment | Unit test failure or score below threshold |
+| `main.yml` | Merge to main | Full + regression evals, update baseline, build image | Drop vs baseline beyond tolerance |
+| `nightly.yml` | Schedule | Full evals (catches model drift with no code change) + score yesterday's production sample | Alerts only |
+| `deploy.yml` | Release | Staging -> smoke evals on the deployed service -> canary -> watch online scores -> full rollout | Online scores or errors worse than current version |
+
+Principles: two test layers (fake-model tests for wiring, real-model evals for behaviour); tiered datasets with a regression set that only grows; pass means "not worse than before"; prompt and model changes go through the same gate as code; eval cost is budgeted.
+
+**Our repo today:** `06-evals/` has the dataset, code checks, judge and runner. Missing (block 12): `thresholds.yaml`, `baseline.json`, `compare.py`, `regressions.jsonl` and the GitHub Actions workflows.
+
+**Online evaluation (block 10):** each `/chat` turn creates a `chat-turn` observation (input = question, output = answer) and returns a `trace_id`; `POST /feedback` stores thumbs up/down as a `user_feedback` score. In Langfuse: add an LLM Connection, create an evaluator (helpfulness rubric), attach a rule on live observations named `chat-turn`, then run `10-serving/live_traffic.py`. Compare where judge and users disagree; the judge's own calls are traced under the environment `langfuse-llm-as-a-judge`.
+
 ## Interview Q&A so far
 
 **Q: What's the difference between an LLM call and an agent?**
@@ -617,3 +757,12 @@ I start with the prebuilt agent and add middleware for policies like approvals a
 
 **Q: A business rule must never be broken. Prompt or code?**
 Code. A prompt rule holds usually; the model decides. Enforce it where the model can't bypass it: in the tool, a custom tools box, or middleware around the tool call.
+
+**Q: Are evals the same as unit tests?**
+They play the same role for behaviour: a fixed set of cases run on every change, blocking releases that regress. But they produce scores, not pass/fail; the agent is non-deterministic, so you use thresholds and trends; and an LLM judge can itself be wrong. Unit tests with a fake model still cover the wiring.
+
+**Q: How do you gate a prompt or model change in CI?**
+Smoke evals on every PR, compared against a baseline from main with per-metric floors and allowed drops (zero tolerance for safety metrics). Full and regression evals on main and nightly. Prompts and model versions are versioned like code and go through the same gate.
+
+**Q: Your eval scores are all 1.0. Good news?**
+Usually the dataset is too easy. Add ambiguous, multi-part, adversarial and real-failure cases until some fail; a dataset nothing fails can't catch regressions.

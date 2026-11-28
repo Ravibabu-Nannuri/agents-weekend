@@ -88,3 +88,10 @@ def test_runaway_agent_returns_clean_error(tmp_path):
             assert r.status_code == 500 and "stopped after 4 steps" in r.json()["detail"]
     finally:
         os.environ.pop("MAX_STEPS")
+
+
+def test_feedback_without_tracing_is_503_and_no_trace_id(tmp_path):
+    with client_with(ScriptedLLM(replies=[AIMessage(content="hi")]), tmp_path / "h.db") as c:
+        r = c.post("/chat", json={"thread_id": "f1", "message": "hello"}).json()
+        assert r["trace_id"] is None
+        assert c.post("/feedback", json={"trace_id": "abc", "thumbs_up": True}).status_code == 503
